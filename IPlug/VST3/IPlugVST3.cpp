@@ -32,6 +32,9 @@ IPlugVST3::IPlugVST3(const InstanceInfo& info, const Config& config)
 , IPlugVST3ControllerBase(parameters)
 , mView(nullptr)
 {
+  processContextRequirements.needTempo();
+  processContextRequirements.needTransportState();
+  processContextRequirements.needProjectTimeMusic();
   CreateTimer();
 }
 
