@@ -35,10 +35,10 @@ IPlugVST3::IPlugVST3(const InstanceInfo& info, const Config& config)
 , IPlugVST3ControllerBase(parameters)
 , mView(nullptr)
 {
-#ifdef ARA_API
   processContextRequirements.needTransportState();
   processContextRequirements.needProjectTimeMusic();
   processContextRequirements.needTempo();
+#ifdef ARA_API
   processContextRequirements.needTimeSignature();
   processContextRequirements.needContinousTimeSamples();
 #endif
