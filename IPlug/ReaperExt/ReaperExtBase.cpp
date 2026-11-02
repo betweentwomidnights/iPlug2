@@ -565,6 +565,12 @@ WDL_DLGRET ReaperExtBase::MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARA
       }
       return 0;
     }
+#ifndef NO_IGRAPHICS
+    case WM_ERASEBKGND:
+      // IGraphics fills the dialog. Erasing here shows the light default background along a growing
+      // edge until the graphics window has been resized and has drawn its next frame.
+      return gPlug->GetUI() ? 1 : 0;
+#endif
     case WM_CLOSE:
 #ifdef OS_LINUX
       gPlug->DestroyMainWindow();
