@@ -47,8 +47,9 @@ public:
   void OnMouseDrag(float x, float y, float dX, float dY, const IMouseMod& mod) override;
   void OnMouseUp(float x, float y, const IMouseMod& mod) override;
   void OnMouseDblClick(float x, float y, const IMouseMod& mod) override;
+  void OnMouseWheel(float x, float y, const IMouseMod& mod, float d) override;
   void OnEndAnimation() override;
-  
+
   static int DeleteChars(ITextEntryControl* _this, size_t pos, size_t num);
   static int InsertChars(ITextEntryControl* _this, size_t pos, const char16_t* text, size_t num);
   static void Layout(StbTexteditRow* row, ITextEntryControl* _this, int start_i);
@@ -62,9 +63,24 @@ public:
 
   void CreateTextEntry(int paramIdx, const IText& text, const IRECT& bounds, int length, const char* str);
 
+  /** Makes the next edit wrap its text across rows. It opens with its top edge and width at the bounds given to
+   * CreateTextEntry, grows downwards to show all the text, and scrolls once it reaches the bottom of the UI.
+   * @param minRows The height to open at, in rows of text
+   * @param frameColor The color of the frame around the edit */
+  void SetNextEditWraps(int minRows, const IColor& frameColor);
+
 private:
-    
+
   void SetStr(const char* str);
+
+  void DrawWrapped(IGraphics& g);
+  void LayoutWrapped(StbTexteditRow* row, int start_i);
+  void FitWrappedBounds();
+  void ScrollToCursor();
+  int CountWrappedRows();
+  float WrappedRowHeight() const { return mText.mSize * 1.3f; }
+  IRECT WrappedTextBounds() const { return mRECT.GetPadded(-6.f); }
+  float WrappedY(float y) const { return y - WrappedTextBounds().T + mWrappedScroll; }
 
   template<typename Proc>
   bool CallSTB(Proc proc);
@@ -84,6 +100,10 @@ private:
   bool mCursorIsSet = false;
   bool mCursorSizesValid = false;
   bool mNotifyTextChange = false;
+  bool mWraps = false;
+  int mWrappedMinRows = 1;
+  float mWrappedScroll = 0.f;
+  IColor mWrappedFrameColor;
 
   STB_TexteditState mEditState;
   WDL_TypedBuf<float> mCharWidths;

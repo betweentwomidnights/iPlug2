@@ -18,6 +18,8 @@
 #include "IPlugPlatform.h"
 #include "IPlugUtilities.h"
 
+#include <algorithm>
+
 using namespace iplug;
 using namespace igraphics;
 
@@ -88,6 +90,12 @@ ITextEntryControl::ITextEntryControl()
 
 void ITextEntryControl::Draw(IGraphics& g)
 {
+  if (mWraps)
+  {
+    DrawWrapped(g);
+    return;
+  }
+
   g.FillRect(mText.mTextEntryBGColor, mRECT);
 
   StbTexteditRow row;
@@ -127,6 +135,62 @@ void ITextEntryControl::Draw(IGraphics& g)
   }
 }
 
+void ITextEntryControl::DrawWrapped(IGraphics& g)
+{
+  g.FillRect(mText.mTextEntryBGColor, mRECT);
+  g.DrawRect(mWrappedFrameColor, mRECT);
+
+  const IRECT area = WrappedTextBounds();
+  const float rowHeight = WrappedRowHeight();
+  const int length = GetLength(this);
+  const int selectionStart = std::min(mEditState.select_start, mEditState.select_end);
+  const int selectionEnd = std::max(mEditState.select_start, mEditState.select_end);
+  const bool hasSelection = selectionStart != selectionEnd;
+  IText rowText = mText;
+  rowText.mAlign = EAlign::Near;
+  rowText.mVAlign = EVAlign::Middle;
+
+  g.PathClipRegion(area);
+  float top = area.T - mWrappedScroll;
+  int first = 0;
+  do
+  {
+    StbTexteditRow row;
+    LayoutWrapped(&row, first);
+    const int last = first + row.num_chars;
+    const IRECT rowBounds(area.L, top, area.R, top + rowHeight);
+
+    const auto xAt = [&](int index) {
+      float x = row.x0;
+      for (int i = first; i < index && i < mCharWidths.GetSize(); ++i)
+        x += mCharWidths.Get()[i];
+      return x;
+    };
+
+    if (hasSelection && selectionStart < last && selectionEnd > first)
+    {
+      const IRECT selection(xAt(std::max(first, selectionStart)), rowBounds.T, xAt(std::min(last, selectionEnd)), rowBounds.B);
+      IBlend blend(EBlend::Default, 0.2f);
+      g.FillRect(mText.mTextEntryFGColor, selection, &blend);
+    }
+
+    if (last > first)
+      g.DrawText(rowText, UTF16ToUTF8String(mEditString.data() + first, mEditString.data() + last).c_str(), rowBounds);
+
+    const int cursor = mEditState.cursor;
+    if (mDrawCursor && !hasSelection && cursor >= first && (cursor < last || last >= length))
+    {
+      const float x = roundf(xAt(cursor));
+      g.FillRect(mText.mTextEntryFGColor, IRECT(x - 1.f, rowBounds.T + 1.f, x, rowBounds.B - 1.f));
+    }
+
+    first = last;
+    top += rowHeight;
+  }
+  while (first < length);
+  g.PathClipRegion();
+}
+
 template<typename Proc>
 bool ITextEntryControl::CallSTB(Proc proc)
 {
@@ -153,7 +217,7 @@ void ITextEntryControl::OnMouseDown(float x, float y, const IMouseMod& mod)
   if(mod.L)
   {
     CallSTB ([&]() {
-      stb_textedit_click(this, &mEditState, x, y);
+      stb_textedit_click(this, &mEditState, x, mWraps ? WrappedY(y) : y);
     });
   }
   
@@ -179,7 +243,7 @@ void ITextEntryControl::OnMouseDrag(float x, float y, float dX, float dY, const 
   if (mod.L)
   {
     CallSTB([&]() {
-      stb_textedit_drag(this, &mEditState, x, y);
+      stb_textedit_drag(this, &mEditState, x, mWraps ? WrappedY(y) : y);
     });
   }
 }
@@ -194,11 +258,21 @@ void ITextEntryControl::OnMouseUp(float x, float y, const IMouseMod& mod)
   if (mod.L)
   {
     CallSTB([&]() {
-      stb_textedit_drag(this, &mEditState, x, y);
+      stb_textedit_drag(this, &mEditState, x, mWraps ? WrappedY(y) : y);
     });
 
     SetDirty(true);
   }
+}
+
+void ITextEntryControl::OnMouseWheel(float x, float y, const IMouseMod& mod, float d)
+{
+  if (!mWraps)
+    return;
+
+  const float overflow = CountWrappedRows() * WrappedRowHeight() - WrappedTextBounds().H();
+  mWrappedScroll = Clip(mWrappedScroll - d * WrappedRowHeight(), 0.f, std::max(0.f, overflow));
+  SetDirty(false);
 }
 
 bool ITextEntryControl::OnKeyDown(float x, float y, const IKeyPress& key)
@@ -345,6 +419,8 @@ void ITextEntryControl::Paste()
   {
     CallSTB([&] {
       auto uText = UTF8ToUTF16String(fromClipboard.Get());
+      if (mWraps) // rows come from wrapping, so a pasted line break would only get in the way
+        std::replace_if(uText.begin(), uText.end(), [](char16_t c) { return c == u'\r' || c == u'\n'; }, u' ');
       stb_textedit_paste (this, &mEditState, uText.data(), (int) uText.size());
     });
   }
@@ -399,6 +475,12 @@ int ITextEntryControl::GetLength(ITextEntryControl* _this)
 //static
 void ITextEntryControl::Layout(StbTexteditRow* row, ITextEntryControl* _this, int start_i)
 {
+  if (_this->mWraps)
+  {
+    _this->LayoutWrapped(row, start_i);
+    return;
+  }
+
   assert (start_i == 0);
 
   _this->FillCharWidthCache();
@@ -459,11 +541,112 @@ void ITextEntryControl::Layout(StbTexteditRow* row, ITextEntryControl* _this, in
 float ITextEntryControl::GetCharWidth(ITextEntryControl* _this, int n, int i)
 {
   _this->FillCharWidthCache();
-  return _this->mCharWidths.Get()[i]; // TODO: n not used?
+  return _this->mCharWidths.Get()[n + i]; // n is the first character of i's row
+}
+
+void ITextEntryControl::LayoutWrapped(StbTexteditRow* row, int start_i)
+{
+  FillCharWidthCache();
+  const float available = WrappedTextBounds().W();
+  const int length = GetLength(this);
+  float width = 0.f;
+  float widthAtBreak = 0.f;
+  int breakAt = -1;
+  int i = start_i;
+  for (; i < length; ++i)
+  {
+    if (mEditString[i] == u'\n')
+    {
+      ++i;
+      break;
+    }
+    // Spaces may hang past the edge, so a row never starts with the one that ended the row before.
+    const float charWidth = mCharWidths.Get()[i];
+    if (width + charWidth > available && i > start_i && mEditString[i] != u' ')
+    {
+      if (breakAt > start_i)
+      {
+        i = breakAt;
+        width = widthAtBreak;
+      }
+      break;
+    }
+    width += charWidth;
+    if (mEditString[i] == u' ')
+    {
+      breakAt = i + 1;
+      widthAtBreak = width;
+    }
+  }
+
+  row->num_chars = i - start_i;
+  row->x0 = WrappedTextBounds().L;
+  row->x1 = row->x0 + width;
+  row->baseline_y_delta = WrappedRowHeight();
+  row->ymin = 0.f;
+  row->ymax = WrappedRowHeight();
+}
+
+int ITextEntryControl::CountWrappedRows()
+{
+  const int length = GetLength(this);
+  int rows = 0;
+  int first = 0;
+  do
+  {
+    StbTexteditRow row;
+    LayoutWrapped(&row, first);
+    first += row.num_chars;
+    ++rows;
+  }
+  while (first < length);
+  return rows;
+}
+
+void ITextEntryControl::FitWrappedBounds()
+{
+  const float padding = mRECT.H() - WrappedTextBounds().H();
+  const float wanted = std::max(CountWrappedRows(), mWrappedMinRows) * WrappedRowHeight() + padding;
+  const float room = GetUI()->GetBounds().B - mRECT.T - 4.f;
+  const float height = std::min(wanted, std::max(room, WrappedRowHeight() + padding));
+  if (height != mRECT.H())
+  {
+    SetTargetAndDrawRECTs(IRECT(mRECT.L, mRECT.T, mRECT.R, mRECT.T + height));
+    GetUI()->SetAllControlsDirty(); // shrinking uncovers what is beneath
+  }
+}
+
+void ITextEntryControl::ScrollToCursor()
+{
+  const int length = GetLength(this);
+  int cursorRow = 0;
+  int rows = 0;
+  int first = 0;
+  do
+  {
+    StbTexteditRow row;
+    LayoutWrapped(&row, first);
+    if (mEditState.cursor >= first)
+      cursorRow = rows;
+    first += row.num_chars;
+    ++rows;
+  }
+  while (first < length);
+
+  const float rowHeight = WrappedRowHeight();
+  const float visible = WrappedTextBounds().H();
+  const float cursorTop = cursorRow * rowHeight;
+  if (cursorTop < mWrappedScroll)
+    mWrappedScroll = cursorTop;
+  else if (cursorTop + rowHeight > mWrappedScroll + visible)
+    mWrappedScroll = cursorTop + rowHeight - visible;
+  mWrappedScroll = Clip(mWrappedScroll, 0.f, std::max(0.f, rows * rowHeight - visible));
 }
 
 void ITextEntryControl::OnStateChanged()
 {
+  if (mWraps)
+    ScrollToCursor();
   SetDirty(false);
 }
 
@@ -471,6 +654,8 @@ void ITextEntryControl::OnTextChange()
 {
   mCharWidths.Resize(0, false);
   FillCharWidthCache();
+  if (mWraps)
+    FitWrappedBounds();
 }
 
 void ITextEntryControl::FillCharWidthCache()
@@ -521,16 +706,33 @@ void ITextEntryControl::CreateTextEntry(int paramIdx, const IText& text, const I
   SetText(text);
   mText.mFGColor = mText.mTextEntryFGColor;
   SetStr(str);
+  mEditState.single_line = mWraps ? 0 : 1;
+  mWrappedScroll = 0.f;
   SelectAll();
   mEditState.cursor = 0;
+  if (mWraps) // opening to read and tweak longer text, so don't arm the next key to replace it all
+  {
+    const int end = static_cast<int>(mEditString.length());
+    mEditState.select_start = mEditState.select_end = mEditState.cursor = end;
+  }
   OnTextChange();
+  if (mWraps)
+    ScrollToCursor();
   SetDirty(true);
   mEditing = true;
+}
+
+void ITextEntryControl::SetNextEditWraps(int minRows, const IColor& frameColor)
+{
+  mWraps = true;
+  mWrappedMinRows = minRows;
+  mWrappedFrameColor = frameColor;
 }
 
 void ITextEntryControl::DismissEdit()
 {
   mEditing = false;
+  mWraps = false;
   SetTargetAndDrawRECTs(IRECT());
   GetUI()->ClearInTextEntryControl();
   GetUI()->SetAllControlsDirty();
@@ -539,6 +741,7 @@ void ITextEntryControl::DismissEdit()
 void ITextEntryControl::CommitEdit()
 {
   mEditing = false;
+  mWraps = false;
   GetUI()->SetControlValueAfterTextEdit(UTF16ToUTF8String(mEditString).c_str());
   SetTargetAndDrawRECTs(IRECT());
   GetUI()->SetAllControlsDirty();
