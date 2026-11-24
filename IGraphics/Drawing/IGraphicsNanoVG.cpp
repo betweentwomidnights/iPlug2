@@ -491,8 +491,19 @@ void IGraphicsNanoVG::OnViewDestroyed()
 
 void IGraphicsNanoVG::DrawResize()
 {
+#if defined OS_LINUX && defined IGRAPHICS_GL
+  // Making the context current on a resized X11 window waits for the X server, tens of ms on
+  // some drivers, and a host or window manager can send a resize for every step of a drag.
+  // Rebuild the FBO once, before the next frame, which runs with the context already current.
+  mMainFrameBufferStale = true;
+#else
   ScopedGLContext scopedGLCtx {this};
+  RecreateMainFrameBuffer();
+#endif
+}
 
+void IGraphicsNanoVG::RecreateMainFrameBuffer()
+{
   if (mMainFrameBuffer != nullptr)
   {
     nvgDeleteFramebuffer(mMainFrameBuffer);
@@ -522,6 +533,14 @@ void IGraphicsNanoVG::BeginFrame()
 {
   mInDraw = true;
   IGraphics::BeginFrame(); // start perf graph timing
+
+#if defined OS_LINUX && defined IGRAPHICS_GL
+  if (mMainFrameBufferStale)
+  {
+    mMainFrameBufferStale = false;
+    RecreateMainFrameBuffer();
+  }
+#endif
 
 #ifdef IGRAPHICS_GL
     glViewport(0, 0, WindowWidth() * GetScreenScale(), WindowHeight() * GetScreenScale());

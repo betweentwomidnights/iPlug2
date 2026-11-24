@@ -162,8 +162,10 @@ private:
   void SetClipRegion(const IRECT& r) override;
   void UpdateLayer() override;
   void ClearFBOStack();
-  
+  void RecreateMainFrameBuffer();
+
   bool mInDraw = false;
+  bool mMainFrameBufferStale = false; // Linux GL: DrawResize() defers the rebuild to BeginFrame()
   WDL_Mutex mFBOMutex;
   std::stack<NVGframebuffer*> mFBOStack; // A stack of FBOs that requires freeing at the end of the frame
   StaticStorage<APIBitmap> mBitmapCache; //not actually static (doesn't require retaining or releasing)
