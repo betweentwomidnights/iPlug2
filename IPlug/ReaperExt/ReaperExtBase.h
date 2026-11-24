@@ -163,6 +163,9 @@ private:
   HWND mXBridge = nullptr;
   enum class EWindowAction { None, Hide, ToggleDock };
   EWindowAction mPendingWindowAction = EWindowAction::None;
+  // The dialog's latest client size, applied to the editor on the next OnTimer
+  int mPendingParentWidth = 0;
+  int mPendingParentHeight = 0;
 #endif
 };
 

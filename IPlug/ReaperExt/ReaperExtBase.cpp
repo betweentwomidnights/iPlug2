@@ -31,6 +31,13 @@ void ReaperExtBase::OnTimer(Timer& t)
 #if defined OS_LINUX && !defined NO_IGRAPHICS
   if (GetUI() && static_cast<IGraphicsLinux*>(GetUI())->IsInPlatformCallback())
     return;
+  if (mPendingParentWidth > 0 && GetUI())
+  {
+    const int w = mPendingParentWidth;
+    const int h = mPendingParentHeight;
+    mPendingParentWidth = mPendingParentHeight = 0;
+    OnParentWindowResize(w, h);
+  }
   const auto action = mPendingWindowAction;
   mPendingWindowAction = EWindowAction::None;
   if (action == EWindowAction::ToggleDock)
@@ -531,6 +538,7 @@ WDL_DLGRET ReaperExtBase::MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARA
 #if defined OS_LINUX && !defined NO_IGRAPHICS
       gPlug->CloseWindow();
       gPlug->mXBridge = nullptr;
+      gPlug->mPendingParentWidth = gPlug->mPendingParentHeight = 0;
 #endif
       if (gPlug->mSaveStateOnDestroy)
         gPlug->SaveDockState();
@@ -560,8 +568,20 @@ WDL_DLGRET ReaperExtBase::MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARA
         w = static_cast<int>(w / scale);
         h = static_cast<int>(h / scale);
 #endif
+#if defined OS_LINUX && !defined NO_IGRAPHICS
+        // Resizing the GL editor waits for the X server to resize its window, tens of ms on
+        // some drivers, and dragging REAPER's window sends a WM_SIZE for every step. Docked,
+        // that stalls REAPER's main thread until it is seconds behind, so keep the latest
+        // size and let OnTimer resize the editor once.
+        if (w > 0 && h > 0)
+        {
+          gPlug->mPendingParentWidth = w;
+          gPlug->mPendingParentHeight = h;
+        }
+#else
         if (w > 0 && h > 0)
           gPlug->OnParentWindowResize(w, h);
+#endif
       }
       return 0;
     }
